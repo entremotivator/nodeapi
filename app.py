@@ -3,38 +3,39 @@ import requests
 import json
 import logging
 
+# Configure Streamlit page
 st.set_page_config(page_title="n8n Workflow Manager", layout="wide")
 
 # --- Sidebar: API Credentials & Connection Details ---
 st.sidebar.header("🔑 n8n API Connection")
-def sidebar_text(key, label, default, **kwargs):
-    st.session_state[key] = st.sidebar.text_input(label, st.session_state.get(key, default), **kwargs)
-sidebar_text("n8n_host", "n8n Host", "agentonline-u29564.vm.elestio.app")
-sidebar_text("n8n_port", "n8n Port (leave blank for default)", "")
-sidebar_text("n8n_base_path", "n8n API Base Path", "api/v1")
-sidebar_text("api_key", "API Key", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1NDI5NWRjYS01YTIxLTQzZDMtYTA1OS1jOTA5YTQ5ZjlkYTEiLCJpc3MiOiJuOG4iLCJhdWQiOiJwdWJsaWMtYXBpIiwiaWF0IjoxNzM2NTQ4NDY0fQ.E0kssDoB4sVrqTuJLBO1Avl2Wxi8cYOzmzABbc-0DbM", type="password")
 
+def sidebar_text_input(key, label, default, **kwargs):
+    return st.sidebar.text_input(label, value=st.session_state.get(key, default), key=key, **kwargs)
+
+# Input fields for API connection
+sidebar_text_input("n8n_host", "n8n Host", "agentonline-u29564.vm.elestio.app")
+sidebar_text_input("n8n_port", "n8n Port (leave blank for default)", "")
+sidebar_text_input("n8n_base_path", "n8n API Base Path", "api/v1")
+st.session_state["api_key"] = st.sidebar.text_input("API Key", type="password")
+
+# Determine protocol based on host
 def get_api_base():
-    port = f":{st.session_state.n8n_port}" if st.session_state.n8n_port else ""
-    return f"https://{st.session_state.n8n_host}{port}/{st.session_state.n8n_base_path}"
+    host = st.session_state["n8n_host"]
+    port = f":{st.session_state['n8n_port']}" if st.session_state["n8n_port"] else ""
+    protocol = "https" if host.startswith("https") or host.endswith(".app") else "http"
+    return f"{protocol}://{host}{port}/{st.session_state['n8n_base_path'].strip('/')}".rstrip("/")
 
 def api_url(endpoint):
-    return f"{get_api_base()}/{endpoint}"
+    return f"{get_api_base()}/{endpoint.strip('/')}"
 
 def make_api_request(method, endpoint, headers=None, data=None, params=None):
     url = api_url(endpoint)
-    headers = headers or {"accept": "application/json", "X-N8N-API-KEY": st.session_state.api_key}
+    headers = headers or {
+        "accept": "application/json",
+        "X-N8N-API-KEY": st.session_state["api_key"]
+    }
     try:
-        if method == "GET":
-            response = requests.get(url, headers=headers, params=params)
-        elif method == "PATCH":
-            response = requests.patch(url, headers=headers, json=data)
-        elif method == "POST":
-            response = requests.post(url, headers=headers, json=data)
-        elif method == "DELETE":
-            response = requests.delete(url, headers=headers)
-        else:
-            raise ValueError("Invalid HTTP method")
+        response = requests.request(method, url, headers=headers, json=data, params=params)
         response.raise_for_status()
         if response.content:
             return response.json()
@@ -44,10 +45,9 @@ def make_api_request(method, endpoint, headers=None, data=None, params=None):
         st.error(f"API error: {e}")
         return None
 
-def fetch_workflows(cursor=None, limit=10, search_query=None):
-    params = {"active": "true", "limit": limit}
-    if cursor:
-        params["cursor"] = cursor
+# --- API Functions ---
+def fetch_workflows(limit=10, search_query=None):
+    params = {"limit": limit}
     if search_query:
         params["search"] = search_query
     return make_api_request("GET", "workflows", params=params)
@@ -85,14 +85,12 @@ if workflows_data and "data" in workflows_data:
     workflows = workflows_data["data"]
     workflow_names = [f"{wf['name']} (ID: {wf['id']})" for wf in workflows]
     workflow_ids = [wf['id'] for wf in workflows]
-    if "selected_workflow_idx" not in st.session_state:
-        st.session_state.selected_workflow_idx = 0
-    st.session_state.selected_workflow_idx = st.sidebar.selectbox(
-        "Select Workflow", range(len(workflows)), 
-        format_func=lambda i: workflow_names[i],
-        index=st.session_state.selected_workflow_idx
+    selected_workflow_idx = st.sidebar.selectbox(
+        "Select Workflow",
+        options=range(len(workflows)),
+        format_func=lambda i: workflow_names[i]
     )
-    selected_workflow_id = workflow_ids[st.session_state.selected_workflow_idx]
+    selected_workflow_id = workflow_ids[selected_workflow_idx]
 else:
     st.warning("No workflows found or API error.")
     st.stop()
@@ -154,14 +152,12 @@ for i, node in enumerate(nodes):
 st.subheader("✏️ Edit a Node")
 if nodes:
     node_names = [f"{i+1}. {node['name']} ({node['type']})" for i, node in enumerate(nodes)]
-    if "edit_node_idx" not in st.session_state:
-        st.session_state.edit_node_idx = 0
-    st.session_state.edit_node_idx = st.selectbox(
-        "Select node to edit:", range(len(nodes)), 
-        format_func=lambda i: node_names[i],
-        index=st.session_state.edit_node_idx
+    edit_node_idx = st.selectbox(
+        "Select node to edit:",
+        options=range(len(nodes)),
+        format_func=lambda i: node_names[i]
     )
-    edit_node = nodes[st.session_state.edit_node_idx]
+    edit_node = nodes[edit_node_idx]
     with st.form("edit_node_form"):
         new_name = st.text_input("Node Name", value=edit_node["name"])
         new_type = st.text_input("Node Type", value=edit_node["type"])
@@ -172,7 +168,7 @@ if nodes:
                 edit_node["name"] = new_name
                 edit_node["type"] = new_type
                 edit_node["parameters"] = json.loads(new_parameters)
-                workflow["nodes"][st.session_state.edit_node_idx] = edit_node
+                workflow["nodes"][edit_node_idx] = edit_node
                 result = make_api_request("PATCH", f"workflows/{workflow['id']}", data=workflow)
                 if result:
                     st.success("Node updated!")
@@ -198,4 +194,3 @@ else:
 
 st.markdown("---")
 st.caption("Demo app for n8n API management. Powered by Streamlit.")
-
